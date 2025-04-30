@@ -1,20 +1,21 @@
 import motor.motor_asyncio
 from config import Config
 from .utils import send_log
+from datetime import datetime
 
 class Database:
-
     def __init__(self, uri, database_name):
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.madflixbotz = self._client[database_name]
         self.col = self.madflixbotz.user
+        self.queue_col = self.madflixbotz.queue  # Collection for queue tasks
 
     def new_user(self, id):
         return dict(
             _id=int(id),                                   
             file_id=None,
             caption=None,
-            format_template=None  # Add this line for the format template
+            format_template=None
         )
 
     async def add_user(self, b, m):
@@ -38,7 +39,7 @@ class Database:
 
     async def delete_user(self, user_id):
         await self.col.delete_many({'_id': int(user_id)})
-    
+
     async def set_thumbnail(self, id, file_id):
         await self.col.update_one({'_id': int(id)}, {'$set': {'file_id': file_id}})
 
@@ -59,21 +60,19 @@ class Database:
     async def get_format_template(self, id):
         user = await self.col.find_one({'_id': int(id)})
         return user.get('format_template', None)
-        
+
     async def set_media_preference(self, id, media_type):
         await self.col.update_one({'_id': int(id)}, {'$set': {'media_type': media_type}})
-        
+
     async def get_media_preference(self, id):
         user = await self.col.find_one({'_id': int(id)})
         return user.get('media_type', None)
 
+    # Queue task logging
+    async def log_queue_task(self, task):
+        await self.queue_col.insert_one({"task": task, "timestamp": datetime.now()})
 
+    async def get_pending_queue_tasks(self):
+        return self.queue_col.find({})
 
 madflixbotz = Database(Config.DB_URL, Config.DB_NAME)
-        
-
-
-# Jishu Developer 
-# Don't Remove Credit 🥺
-# Telegram Channel @Madflix_Bots
-# Developer @JishuDeveloper
