@@ -1,9 +1,11 @@
-telethon
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
 TgCrypto
-motor
 dnspython
 hachoir
-Pillow
 aiohttp
 pytz
 psutil
+telethon>=1.36.0
+motor
+pillow
+hachoir
