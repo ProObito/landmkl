@@ -58,7 +58,8 @@ class Bot(TelegramClient):
             api_hash=Config.API_HASH,
         )
         self.mention = None
-        self.username = None  self.uptime = Config.BOT_UPTIME
+        self.username = None
+        self.uptime = Config.BOT_UPTIME
 
     async def start(self):
         await super().start(bot_token=Config.BOT_TOKEN)
