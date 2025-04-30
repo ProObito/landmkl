@@ -4,6 +4,7 @@ import logging.config
 from datetime import datetime
 from pytz import timezone
 from telethon import TelegramClient, events
+from telethon.errors import SessionPasswordNeededError, FloodWaitError
 from config import Config
 import os
 
@@ -62,7 +63,28 @@ class Bot(TelegramClient):
         self.uptime = Config.BOT_UPTIME
 
     async def start(self):
-        await super().start(bot_token=Config.BOT_TOKEN)
+        # Attempt to connect with retries
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                await super().start(bot_token=Config.BOT_TOKEN)
+                logger.info("Successfully connected to Telegram")
+                break
+            except (ConnectionError, SessionPasswordNeededError) as e:
+                logger.error(f"Connection attempt {attempt} failed: {e}")
+                if attempt == max_retries:
+                    logger.error("Max retries reached, exiting")
+                    raise
+                await asyncio.sleep(5)  # Wait before retrying
+            except FloodWaitError as e:
+                logger.error(f"Flood wait error: waiting {e.seconds} seconds")
+                await asyncio.sleep(e.seconds)
+
+        # Ensure client is connected
+        if not self.is_connected():
+            logger.error("Client failed to connect")
+            raise ConnectionError("Failed to connect to Telegram")
+
         me = await self.get_me()
         self.mention = f"[{me.first_name}](tg://user?id={me.id})"
         self.username = f"@{me.username}"
@@ -90,9 +112,10 @@ class Bot(TelegramClient):
         # Notify admin and log channel
         for id in Config.ADMIN:
             try:
-                await self.send_message(Config.LOG_CHANNEL, f"**{me.first_name} Is Started.....✨️**")
+                await self.send_message(id, f"**{me.first_name} Is Started.....✨️**")
             except Exception as e:
                 logger.error(f"Failed to notify admin {id}: {e}")
+
         if Config.LOG_CHANNEL:
             try:
                 curr = datetime.now(timezone("Asia/Kolkata"))
@@ -107,4 +130,8 @@ class Bot(TelegramClient):
 
 if __name__ == "__main__":
     bot = Bot()
-    bot.run_until_disconnected()
+    try:
+        bot.run_until_disconnected()
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
+        raise
