@@ -22,7 +22,9 @@ class Config(object):
     LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "-1002200709110"))
     DUMP_CHANNEL = int(os.environ.get("DUMP_CHANNEL", "-1002200709110"))
     OWNER_ID = int(os.environ.get("OWNER_ID", "5585016974"))
-
+    # Queue config
+    QUEUE_MAXSIZE = int(os.environ.get("QUEUE_MAXSIZE", 100))
+    
     # wes response configuration     
     WEBHOOK = bool(os.environ.get("WEBHOOK", "True"))
 
