@@ -2,9 +2,12 @@ import math, time
 from datetime import datetime
 from pytz import timezone
 from config import Config, Txt 
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon.tl.types import InlineKeyboardButton, InlineKeyboardMarkup
+import logging
 
-async def progress_for_pyrogram(current, total, ud_type, message, start):
+logger = logging.getLogger(__name__)
+
+async def progress_for_telethon(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
     if round(diff % 5.00) == 0 or current == total:        
@@ -29,14 +32,12 @@ async def progress_for_pyrogram(current, total, ud_type, message, start):
             estimated_total_time if estimated_total_time != '' else "0 s"
         )
         try:
-            await message.edit(
+            await message.edit_text(
                 text=f"{ud_type}\n\n{tmp}",               
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel ✖️", callback_data="close")]])                                               
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel ✖️", callback_data="close")]])
             )
         except:
-            pass
-            
-            
+            logger.error("Failed to update progress message")
 
 def humanbytes(size):    
     if not size:
@@ -48,7 +49,6 @@ def humanbytes(size):
         size /= power
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'b'
-
 
 def TimeFormatter(milliseconds: int) -> str:
     seconds, milliseconds = divmod(int(milliseconds), 1000)
@@ -75,15 +75,11 @@ async def send_log(b, u):
         curr = datetime.now(timezone("Asia/Kolkata"))
         date = curr.strftime('%d %B, %Y')
         time = curr.strftime('%I:%M:%S %p')
+        mention = f"[{u.first_name}](tg://user?id={u.id})"
         await b.send_message(
             Config.LOG_CHANNEL,
-            f"<b><u>New User Started The Bot</u></b> \n\n<b>User ID</b> : `{u.id}` \n<b>First Name</b> : {u.first_name} \n<b>Last Name</b> : {u.last_name} \n<b>User Name</b> : @{u.username} \n<b>User Mention</b> : {u.mention} \n<b>User Link</b> : <a href='tg://openmessage?user_id={u.id}'>Click Here</a>\n\nDate: {date}\nTime: {time}\n\nBy: {b.mention}"
+            f"<b><u>New User Started The Bot</u></b> \n\n<b>User ID</b> : `{u.id}` \n<b>First Name</b> : {u.first_name} \n<b>Last Name</b> : {u.last_name} \n<b>User Name</b> : @{u.username} \n<b>User Mention</b> : {mention} \n<b>User Link</b> : <a href='tg://openmessage?user_id={u.id}'>Click Here</a>\n\nDate: {date}\nTime: {time}\n\nBy: {b.mention}"
         )
-        
 
-
-
-# Jishu Developer 
-# Don't Remove Credit 🥺
-# Telegram Channel @Madflix_Bots
-# Developer @JishuDeveloper
+async def log_queue_task(task):
+    logger.info(f"Task queued: {task}")
