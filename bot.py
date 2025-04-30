@@ -5,9 +5,32 @@ from datetime import datetime
 from pytz import timezone
 from telethon import TelegramClient, events
 from config import Config
+import os
 
-# Load logging configuration
-logging.config.fileConfig('logging.conf')
+# Try to load logging configuration, fall back to basic config if it fails
+try:
+    if os.path.exists('logging.conf'):
+        logging.config.fileConfig('logging.conf')
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler('bot.log')
+            ]
+        )
+except Exception as e:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('bot.log')
+        ]
+    )
+    logging.error(f"Failed to load logging.conf: {e}")
+
 logger = logging.getLogger(__name__)
 
 # Global queue for tasks
@@ -22,7 +45,6 @@ async def process_queue(client):
             if task["handler"] == "rename":
                 from plugins.file_rename import rename_file
                 await rename_file(client, task)
-            # Add other handlers as needed (e.g., thumbnail, metadata)
             queue.task_done()
         except Exception as e:
             logger.error(f"Error processing task {task}: {e}")
@@ -36,8 +58,7 @@ class Bot(TelegramClient):
             api_hash=Config.API_HASH,
         )
         self.mention = None
-        self.username = None
-        self.uptime = Config.BOT_UPTIME
+        self.username = None  self.uptime = Config.BOT_UPTIME
 
     async def start(self):
         await super().start(bot_token=Config.BOT_TOKEN)
@@ -48,11 +69,11 @@ class Bot(TelegramClient):
 
         # Register plugin handlers
         from plugins.file_rename import rename_command, auto_rename_files
-        from plugins.start import start_command  # Placeholder
-        from plugins.metadata import metadata_command  # Placeholder
-        from plugins.admin import admin_command  # Placeholder
-        from plugins.thumb_cap import thumb_command  # Placeholder
-        from plugins.forcesub import forcesub_check  # Placeholder
+        from plugins.start import start_command
+        from plugins.metadata import metadata_command
+        from plugins.admin import admin_command
+        from plugins.thumb_cap import thumb_command
+        from plugins.forcesub import forcesub_check
 
         self.add_event_handler(start_command, events.NewMessage(pattern="/start"))
         self.add_event_handler(rename_command, events.NewMessage(pattern="/rename"))
@@ -69,8 +90,8 @@ class Bot(TelegramClient):
         for id in Config.ADMIN:
             try:
                 await self.send_message(Config.LOG_CHANNEL, f"**{me.first_name} Is Started.....✨️**")
-            except:
-                logger.error(f"Failed to notify admin {id}")
+            except Exception as e:
+                logger.error(f"Failed to notify admin {id}: {e}")
         if Config.LOG_CHANNEL:
             try:
                 curr = datetime.now(timezone("Asia/Kolkata"))
@@ -80,8 +101,8 @@ class Bot(TelegramClient):
                     Config.LOG_CHANNEL,
                     f"**{self.mention} Is Restarted !!**\n\n📅 Date : `{date}`\n⏰ Time : `{time}`\n🌐 Timezone : `Asia/Kolkata`\n\n🉐 Version : `Telethon`"
                 )
-            except:
-                logger.error("Please make the bot admin in the log channel")
+            except Exception as e:
+                logger.error(f"Failed to send restart message to log channel: {e}")
 
 if __name__ == "__main__":
     bot = Bot()
