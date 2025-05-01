@@ -1,3 +1,5 @@
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
+
 import asyncio
 import logging
 import logging.config
@@ -38,23 +40,32 @@ SEMAPHORE = asyncio.Semaphore(5)
 
 async def process_queue(app):
     while True:
-        task = await queue.get()
-        async with SEMAPHORE:
-            max_retries = 3
-            for attempt in range(1, max_retries + 1):
-                try:
-                    logger.info(f"Processing task: {task}")
-                    if task["handler"] == "rename":
-                        from plugins.file_rename import rename_file
-                        await rename_file(app, task)
-                    queue.task_done()
-                    break
-                except Exception as e:
-                    logger.error(f"Error processing task {task} on attempt {attempt}: {e}")
-                    if attempt == max_retries:
-                        logger.error(f"Max retries reached for task {task}")
+        try:
+            task = await queue.get()
+            async with SEMAPHORE:
+                max_retries = 3
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        logger.info(f"Processing task: {task['file_id']} - {task['new_file_name']}")
+                        if task["handler"] == "rename":
+                            from plugins.file_rename import rename_file
+                            await rename_file(app, task)
                         queue.task_done()
-                    await asyncio.sleep(2 ** attempt)
+                        break
+                    except Exception as e:
+                        logger.error(f"Error processing task {task['file_id']} on attempt {attempt}: {e}")
+                        if attempt == max_retries:
+                            logger.error(f"Max retries reached for task {task['file_id']}")
+                            queue.task_done()
+                        await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.error(f"Queue worker error: {e}")
+            await asyncio.sleep(5)  # Prevent tight loop on failure
+
+async def queue_health_check():
+    while True:
+        logger.info(f"Queue status - Size: {queue.qsize()}, Full: {queue.full()}")
+        await asyncio.sleep(300)  # Log every 5 minutes
 
 class Bot(Client):
     def __init__(self):
@@ -84,7 +95,6 @@ class Bot(Client):
                     raise
                 await asyncio.sleep(2 ** attempt)
 
-        # Ensure MongoDB is connected
         try:
             await madflixbotz.col.find_one()
             logger.info("MongoDB connected successfully")
@@ -98,6 +108,7 @@ class Bot(Client):
         logger.info(f"{me.first_name} Is Started.....✨️")
 
         asyncio.create_task(process_queue(self))
+        asyncio.create_task(queue_health_check())
 
         for id in Config.ADMIN:
             try:
@@ -128,3 +139,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         raise
+
+
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
