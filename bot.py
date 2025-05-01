@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 queue = asyncio.Queue(maxsize=Config.QUEUE_MAXSIZE if hasattr(Config, 'QUEUE_MAXSIZE') else 100)
 user_semaphores = defaultdict(lambda: asyncio.Semaphore(4))  # Per-user limit: 4 tasks
-MAX_CONCURRENT_TASKS = 50  # Global limit to prevent Heroku overload
+MAX_CONCURRENT_TASKS = 50  # Global limit for Heroku
 global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 async def process_queue(app):
@@ -82,7 +82,7 @@ async def queue_health_check():
     while True:
         active_users = len(user_semaphores)
         logger.info(f"Queue status - Size: {queue.qsize()}, Full: {queue.full()}, Active users: {active_users}")
-        await asyncio.sleep(120)  # Log every 2 minutes
+        await asyncio.sleep(120)
 
 class Bot(Client):
     def __init__(self):
@@ -102,6 +102,15 @@ class Bot(Client):
         max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
+                # Ensure clean session
+                if os.path.exists("renamer.session"):
+                    try:
+                        await self.stop()
+                        os.remove("renamer.session")
+                        logger.info("Old session removed")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove old session: {e}")
+
                 await super().start()
                 logger.info("Successfully connected to Telegram")
                 break
@@ -146,8 +155,11 @@ class Bot(Client):
                 logger.error(f"Failed to send restart message to log channel: {e}")
 
     async def stop(self):
-        await super().stop()
-        logger.info("Bot stopped")
+        try:
+            await super().stop()
+            logger.info("Bot stopped")
+        except Exception as e:
+            logger.error(f"Error stopping bot: {e}")
 
 if __name__ == "__main__":
     bot = Bot()
