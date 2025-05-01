@@ -1,4 +1,3 @@
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
 import motor.motor_asyncio
 from config import Config
 from .utils import send_log
