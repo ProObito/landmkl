@@ -1,5 +1,3 @@
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
-
 import asyncio
 import logging
 import logging.config
@@ -9,6 +7,7 @@ from pyrogram import Client, idle
 from config import Config
 from helper.database import madflixbotz
 import os
+from collections import defaultdict
 
 try:
     if os.path.exists('logging.conf'):
@@ -36,36 +35,54 @@ except Exception as e:
 logger = logging.getLogger(__name__)
 
 queue = asyncio.Queue(maxsize=Config.QUEUE_MAXSIZE if hasattr(Config, 'QUEUE_MAXSIZE') else 100)
-SEMAPHORE = asyncio.Semaphore(5)
+user_semaphores = defaultdict(lambda: asyncio.Semaphore(4))  # Per-user limit: 4 tasks
+MAX_CONCURRENT_TASKS = 50  # Global limit to prevent Heroku overload
+global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 async def process_queue(app):
     while True:
         try:
             task = await queue.get()
-            async with SEMAPHORE:
-                max_retries = 3
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        logger.info(f"Processing task: {task['file_id']} - {task['new_file_name']}")
-                        if task["handler"] == "rename":
-                            from plugins.file_rename import rename_file
-                            await rename_file(app, task)
-                        queue.task_done()
-                        break
-                    except Exception as e:
-                        logger.error(f"Error processing task {task['file_id']} on attempt {attempt}: {e}")
-                        if attempt == max_retries:
-                            logger.error(f"Max retries reached for task {task['file_id']}")
+            user_id = task.get('user_id')
+            if not user_id:
+                logger.error(f"Task {task['file_id']} missing user_id")
+                queue.task_done()
+                continue
+
+            async with global_semaphore:
+                async with user_semaphores[user_id]:
+                    max_retries = 3
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            logger.info(f"Processing task for user {user_id}: {task['file_id']} - {task['new_file_name']}")
+                            await app.send_message(
+                                task['chat_id'],
+                                "⚙️ Download Starting..."
+                            )
+                            if task["handler"] == "rename":
+                                from plugins.file_rename import rename_file
+                                await rename_file(app, task)
                             queue.task_done()
-                        await asyncio.sleep(2 ** attempt)
+                            break
+                        except Exception as e:
+                            logger.error(f"Error processing task {task['file_id']} for user {user_id} on attempt {attempt}: {e}")
+                            if attempt == max_retries:
+                                logger.error(f"Max retries reached for task {task['file_id']}")
+                                await app.send_message(
+                                    task['chat_id'],
+                                    f"Error processing file {task['new_file_name']}: {e}"
+                                )
+                                queue.task_done()
+                            await asyncio.sleep(2 ** attempt)
         except Exception as e:
             logger.error(f"Queue worker error: {e}")
-            await asyncio.sleep(5)  # Prevent tight loop on failure
+            await asyncio.sleep(5)
 
 async def queue_health_check():
     while True:
-        logger.info(f"Queue status - Size: {queue.qsize()}, Full: {queue.full()}")
-        await asyncio.sleep(300)  # Log every 5 minutes
+        active_users = len(user_semaphores)
+        logger.info(f"Queue status - Size: {queue.qsize()}, Full: {queue.full()}, Active users: {active_users}")
+        await asyncio.sleep(120)  # Log every 2 minutes
 
 class Bot(Client):
     def __init__(self):
@@ -139,6 +156,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         raise
-
-
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
