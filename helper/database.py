@@ -1,8 +1,11 @@
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
+
 import motor.motor_asyncio
 from config import Config
 from .utils import send_log
 from datetime import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +143,11 @@ class Database:
         logger.info(f"Logged queue task: {serializable_task}")
 
     async def get_pending_queue_tasks(self):
-        return self.queue_col.find({})
+        tasks = self.queue_col.find({})
+        return tasks
 
 madflixbotz = Database(Config.DB_URL, Config.DB_NAME)
+
+
+
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
