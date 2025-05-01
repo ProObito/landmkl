@@ -1,11 +1,10 @@
-from telethon import TelegramClient, events
-from telethon.tl.types import DocumentAttributeVideo, DocumentAttributeAudio
-from telethon.errors import FloodWait
+from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 from PIL import Image
 from datetime import datetime
 from hachoir.metadata import extractMetadata
 from hachoir.parser import createParser
-from helper.utils import progress_for_telethon, humanbytes, convert, log_queue_task
+from helper.utils import progress_for_pyrogram, humanbytes, convert, log_queue_task
 from helper.database import madflixbotz
 from config import Config
 import os
@@ -16,8 +15,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Global queue (imported from bot.py)
-from bot import queue
+# Global queue and semaphore (imported from bot.py)
+from bot import queue, SEMAPHORE
 
 # Regex patterns (unchanged)
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)')
@@ -103,9 +102,9 @@ def extract_episode_number(filename):
 
 renaming_operations = {}
 
-async def rename_file(client, task):
+async def rename_file(app, task):
     """Process a rename task from the queue"""
-    event = task["event"]
+    message = task["message"]
     file_id = task["file_id"]
     file_name = task["file_name"]
     new_file_name = task["new_file_name"]
@@ -115,17 +114,16 @@ async def rename_file(client, task):
     format_template = task["format_template"]
 
     file_path = f"downloads/{new_file_name}"
-    download_msg = await client.send_message(chat_id, "Trying To Download.....")
+    download_msg = await app.send_message(chat_id, "Trying To Download.....")
     try:
-        path = await client.download_media(
-            message=event.message,
-            file=file_path,
-            progress=progress_for_telethon,
+        path = await message.download(
+            file_name=file_path,
+            progress=progress_for_pyrogram,
             progress_args=("Download Started....", download_msg, time.time())
         )
     except Exception as e:
         logger.error(f"Download error: {e}")
-        await download_msg.edit_text(f"Error: {e}")
+        await download_msg.edit(f"Error: {e}")
         del renaming_operations[file_id]
         return
 
@@ -137,7 +135,7 @@ async def rename_file(client, task):
     except Exception as e:
         logger.error(f"Error getting duration: {e}")
 
-    upload_msg = await download_msg.edit_text("Trying To Uploading.....")
+    upload_msg = await download_msg.edit("Trying To Uploading.....")
     ph_path = None
     c_caption = await madflixbotz.get_caption(chat_id)
     c_thumb = await madflixbotz.get_thumbnail(chat_id)
@@ -145,10 +143,10 @@ async def rename_file(client, task):
     caption = c_caption.format(filename=new_file_name, filesize=humanbytes(file_size), duration=convert(duration)) if c_caption else f"**{new_file_name}**"
 
     if c_thumb:
-        ph_path = await client.download_media(c_thumb)
+        ph_path = await app.download_media(c_thumb)
         logger.info(f"Thumbnail downloaded successfully. Path: {ph_path}")
-    elif media_type == "video" and event.message.video and event.message.video.thumbs:
-        ph_path = await client.download_media(event.message.video.thumbs[0])
+    elif media_type == "video" and message.video and message.video.thumbs:
+        ph_path = await app.download_media(message.video.thumbs[0])
 
     if ph_path:
         Image.open(ph_path).convert("RGB").save(ph_path)
@@ -156,44 +154,52 @@ async def rename_file(client, task):
         img.resize((320, 320))
         img.save(ph_path, "JPEG")
 
-    try:
-        if media_type == "document":
-            await client.send_document(
-                chat_id,
-                document=file_path,
-                thumb=ph_path,
-                caption=caption,
-                progress=progress_for_telethon,
-                progress_args=("Upload Started.....", upload_msg, time.time())
-            )
-        elif media_type == "video":
-            await client.send_file(
-                chat_id,
-                file=file_path,
-                caption=caption,
-                thumb=ph_path,
-                attributes=[DocumentAttributeVideo(duration=duration, w=0, h=0)],
-                progress=progress_for_telethon,
-                progress_args=("Upload Started.....", upload_msg, time.time())
-            )
-        elif media_type == "audio":
-            await client.send_file(
-                chat_id,
-                file=file_path,
-                caption=caption,
-                thumb=ph_path,
-                attributes=[DocumentAttributeAudio(duration=duration)],
-                progress=progress_for_telethon,
-                progress_args=("Upload Started.....", upload_msg, time.time())
-            )
-    except Exception as e:
-        logger.error(f"Upload error: {e}")
-        os.remove(file_path)
-        if ph_path:
-            os.remove(ph_path)
-        await upload_msg.edit_text(f"Error: {e}")
-        del renaming_operations[file_id]
-        return
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            if media_type == "document":
+                await app.send_document(
+                    chat_id,
+                    document=file_path,
+                    thumb=ph_path,
+                    caption=caption,
+                    progress=progress_for_pyrogram,
+                    progress_args=("Upload Started.....", upload_msg, time.time())
+                )
+            elif media_type == "video":
+                await app.send_video(
+                    chat_id,
+                    video=file_path,
+                    caption=caption,
+                    thumb=ph_path,
+                    duration=duration,
+                    progress=progress_for_pyrogram,
+                    progress_args=("Upload Started.....", upload_msg, time.time())
+                )
+            elif media_type == "audio":
+                await app.send_audio(
+                    chat_id,
+                    audio=file_path,
+                    caption=caption,
+                    thumb=ph_path,
+                    duration=duration,
+                    progress=progress_for_pyrogram,
+                    progress_args=("Upload Started.....", upload_msg, time.time())
+                )
+            break
+        except FloodWait as e:
+            logger.error(f"Flood wait on attempt {attempt}: waiting {e.value} seconds")
+            await asyncio.sleep(e.value)
+        except Exception as e:
+            logger.error(f"Upload error on attempt {attempt}: {e}")
+            if attempt == max_retries:
+                os.remove(file_path)
+                if ph_path:
+                    os.remove(ph_path)
+                await upload_msg.edit(f"Error: {e}")
+                del renaming_operations[file_id]
+                return
+            await asyncio.sleep(2)
 
     await download_msg.delete()
     os.remove(file_path)
@@ -202,20 +208,20 @@ async def rename_file(client, task):
     del renaming_operations[file_id]
     logger.info(f"File {new_file_name} processed successfully")
 
-@client.on(events.NewMessage(from_users=Config.ADMIN, pattern="/rename"))
-async def rename_command(event):
-    args = event.message.text.split(maxsplit=1)
+@Client.on_message(filters.command("rename") & filters.user(Config.ADMIN))
+async def rename_command(client, message):
+    args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await event.reply("Please provide a new name")
+        await message.reply("Please provide a new name")
         return
     new_name = args[1]
-    file_path = "some_file_path"  # Replace with actual logic
-    chat_id = event.chat_id
+    chat_id = message.chat.id
+    file_id = f"manual_{chat_id}_{int(time.time())}"
     task = {
         "handler": "rename",
-        "event": event,
-        "file_id": f"manual_{chat_id}_{int(time.time())}",
-        "file_name": file_path,
+        "message": message,
+        "file_id": file_id,
+        "file_name": "manual_file",
         "new_file_name": new_name,
         "media_type": "document",
         "chat_id": chat_id,
@@ -226,38 +232,37 @@ async def rename_command(event):
         await queue.put(task)
         await log_queue_task(task)
         await madflixbotz.log_queue_task(task)  # Log to database
-        await event.reply("File added to rename queue")
+        await message.reply("File added to rename queue")
     except asyncio.QueueFull:
-        await event.reply("Queue is full, please try again later")
+        await message.reply("Queue is full, please try again later")
 
-@client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private and (e.document or e.video or e.audio)))
-async def auto_rename_files(event):
-    user_id = event.sender_id
-    firstname = event.sender.first_name
+@Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def auto_rename_files(client, message):
+    user_id = message.from_user.id
     format_template = await madflixbotz.get_format_template(user_id)
     media_preference = await madflixbotz.get_media_preference(user_id)
 
     if not format_template:
-        await event.reply("Please Set An Auto Rename Format First Using /autorename")
+        await message.reply("Please Set An Auto Rename Format First Using /autorename")
         return
 
-    if event.document:
-        file_id = event.document.id
-        file_name = event.document.attributes[0].file_name if event.document.attributes else "unknown"
+    if message.document:
+        file_id = message.document.file_id
+        file_name = message.document.file_name if message.document.file_name else "unknown"
         media_type = media_preference or "document"
-        file_size = event.document.size
-    elif event.video:
-        file_id = event.video.id
+        file_size = message.document.file_size
+    elif message.video:
+        file_id = message.video.file_id
         file_name = "video.mp4"
         media_type = media_preference or "video"
-        file_size = event.video.size
-    elif event.audio:
-        file_id = event.audio.id
+        file_size = message.video.file_size
+    elif message.audio:
+        file_id = message.audio.file_id
         file_name = "audio.mp3"
         media_type = media_preference or "audio"
-        file_size = event.audio.size
+        file_size = message.audio.file_size
     else:
-        await event.reply("Unsupported File Type")
+        await message.reply("Unsupported File Type")
         return
 
     logger.info(f"Original File Name: {file_name}")
@@ -283,7 +288,7 @@ async def auto_rename_files(event):
             if quality_placeholder in format_template:
                 extracted_qualities = extract_quality(file_name)
                 if extracted_qualities == "Unknown":
-                    await event.reply("I Was Not Able To Extract The Quality Properly. Renaming As 'Unknown'...")
+                    await message.reply("I Was Not Able To Extract The Quality Properly. Renaming As 'Unknown'...")
                     del renaming_operations[file_id]
                     return
                 format_template = format_template.replace(quality_placeholder, "".join(extracted_qualities))
@@ -293,12 +298,12 @@ async def auto_rename_files(event):
 
         task = {
             "handler": "rename",
-            "event": event,
+            "message": message,
             "file_id": file_id,
             "file_name": file_name,
             "new_file_name": new_file_name,
             "media_type": media_type,
-            "chat_id": event.chat_id,
+            "chat_id": message.chat.id,
             "file_size": file_size,
             "format_template": format_template
         }
@@ -306,9 +311,9 @@ async def auto_rename_files(event):
             await queue.put(task)
             await log_queue_task(task)
             await madflixbotz.log_queue_task(task)
-            await event.reply("File added to rename queue")
+            await message.reply("File added to rename queue")
         except asyncio.QueueFull:
-            await event.reply("Queue is full, please try again later")
+            await message.reply("Queue is full, please try again later")
     else:
-        await event.reply("Could not extract episode number")
+        await message.reply("Could not extract episode number")
         del renaming_operations[file_id]
