@@ -3,8 +3,7 @@ import logging
 import logging.config
 from datetime import datetime
 from pytz import timezone
-from telethon import TelegramClient, events
-from telethon.errors import SessionPasswordNeededError, FloodWaitError
+from pyrogram import Client, idle
 from config import Config
 import os
 
@@ -37,26 +36,33 @@ logger = logging.getLogger(__name__)
 # Global queue for tasks
 queue = asyncio.Queue(maxsize=Config.QUEUE_MAXSIZE if hasattr(Config, 'QUEUE_MAXSIZE') else 100)
 
+# Semaphore to limit concurrent tasks (e.g., 5 at a time)
+SEMAPHORE = asyncio.Semaphore(5)
+
 # Consumer coroutine to process queued tasks
-async def process_queue(client):
+async def process_queue(app):
     while True:
         task = await queue.get()
-        try:
-            logger.info(f"Processing task: {task}")
-            if task["handler"] == "rename":
-                from plugins.file_rename import rename_file
-                await rename_file(client, task)
-            queue.task_done()
-        except Exception as e:
-            logger.error(f"Error processing task {task}: {e}")
-            queue.task_done()
+        async with SEMAPHORE:  # Limit concurrent processing
+            try:
+                logger.info(f"Processing task: {task}")
+                if task["handler"] == "rename":
+                    from plugins.file_rename import rename_file
+                    await rename_file(app, task)
+                queue.task_done()
+            except Exception as e:
+                logger.error(f"Error processing task {task}: {e}")
+                queue.task_done()
 
-class Bot(TelegramClient):
+class Bot(Client):
     def __init__(self):
         super().__init__(
-            session="renamer",
+            name="renamer",
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
+            bot_token=Config.BOT_TOKEN,
+            plugins={"root": "plugins"},
+            workers=25  # As per your previous request
         )
         self.mention = None
         self.username = None
@@ -64,50 +70,26 @@ class Bot(TelegramClient):
 
     async def start(self):
         # Attempt to connect with retries
-        max_retries = 3
+        max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
-                await super().start(bot_token=Config.BOT_TOKEN)
+                await super().start()
                 logger.info("Successfully connected to Telegram")
                 break
-            except (ConnectionError, SessionPasswordNeededError) as e:
+            except Exception as e:
                 logger.error(f"Connection attempt {attempt} failed: {e}")
                 if attempt == max_retries:
                     logger.error("Max retries reached, exiting")
                     raise
-                await asyncio.sleep(5)  # Wait before retrying
-            except FloodWaitError as e:
-                logger.error(f"Flood wait error: waiting {e.seconds} seconds")
-                await asyncio.sleep(e.seconds)
-
-        # Ensure client is connected
-        if not self.is_connected():
-            logger.error("Client failed to connect")
-            raise ConnectionError("Failed to connect to Telegram")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
 
         me = await self.get_me()
         self.mention = f"[{me.first_name}](tg://user?id={me.id})"
         self.username = f"@{me.username}"
         logger.info(f"{me.first_name} Is Started.....✨️")
 
-        # Register plugin handlers
-        from plugins.file_rename import rename_command, auto_rename_files
-        from plugins.start import start_command
-        from plugins.metadata import metadata_command
-        from plugins.admin import admin_command
-        from plugins.thumb_cap import thumb_command
-        from plugins.forcesub import forcesub_check
-
-        self.add_event_handler(start_command, events.NewMessage(pattern="/start"))
-        self.add_event_handler(rename_command, events.NewMessage(pattern="/rename"))
-        self.add_event_handler(auto_rename_files, events.NewMessage(incoming=True, func=lambda e: e.is_private and (e.document or e.video or e.audio)))
-        self.add_event_handler(metadata_command, events.NewMessage(pattern="/metadata"))
-        self.add_event_handler(admin_command, events.NewMessage(pattern="/admin"))
-        self.add_event_handler(thumb_command, events.NewMessage(pattern="/set_thumb"))
-        self.add_event_handler(forcesub_check, events.NewMessage(incoming=True))
-
         # Start queue consumer
-        self.loop.create_task(process_queue(self))
+        asyncio.create_task(process_queue(self))
 
         # Notify admin and log channel
         for id in Config.ADMIN:
@@ -123,15 +105,19 @@ class Bot(TelegramClient):
                 time = curr.strftime('%I:%M:%S %p')
                 await self.send_message(
                     Config.LOG_CHANNEL,
-                    f"**{self.mention} Is Restarted !!**\n\n📅 Date : `{date}`\n⏰ Time : `{time}`\n🌐 Timezone : `Asia/Kolkata`\n\n🉐 Version : `Telethon`"
+                    f"**{self.mention} Is Restarted !!**\n\n📅 Date : `{date}`\n⏰ Time : `{time}`\n🌐 Timezone : `Asia/Kolkata`\n\n🉐 Version : `Pyrogram`"
                 )
             except Exception as e:
                 logger.error(f"Failed to send restart message to log channel: {e}")
 
+    async def stop(self):
+        await super().stop()
+        logger.info("Bot stopped")
+
 if __name__ == "__main__":
     bot = Bot()
     try:
-        bot.run_until_disconnected()
+        bot.run()
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         raise
