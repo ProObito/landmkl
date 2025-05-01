@@ -5,7 +5,7 @@ hachoir
 aiohttp
 pytz
 psutil
-telethon>=1.36.0
+https://codeload.github.com/KurimuzonAkuma/pyrogram/zip/refs/heads/dev
 motor
 pillow
 hachoir
