@@ -5,9 +5,9 @@ from datetime import datetime
 from pytz import timezone
 from pyrogram import Client, idle
 from config import Config
+from helper.database import madflixbotz
 import os
 
-# Try to load logging configuration, fall back to basic config if it fails
 try:
     if os.path.exists('logging.conf'):
         logging.config.fileConfig('logging.conf')
@@ -33,17 +33,13 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 
-# Global queue for tasks
 queue = asyncio.Queue(maxsize=Config.QUEUE_MAXSIZE if hasattr(Config, 'QUEUE_MAXSIZE') else 100)
-
-# Semaphore to limit concurrent tasks (e.g., 5 at a time)
 SEMAPHORE = asyncio.Semaphore(5)
 
-# Consumer coroutine to process queued tasks
 async def process_queue(app):
     while True:
         task = await queue.get()
-        async with SEMAPHORE:  # Limit concurrent processing
+        async with SEMAPHORE:
             max_retries = 3
             for attempt in range(1, max_retries + 1):
                 try:
@@ -88,15 +84,21 @@ class Bot(Client):
                     raise
                 await asyncio.sleep(2 ** attempt)
 
+        # Ensure MongoDB is connected
+        try:
+            await madflixbotz.col.find_one()
+            logger.info("MongoDB connected successfully")
+        except Exception as e:
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            raise
+
         me = await self.get_me()
         self.mention = f"[{me.first_name}](tg://user?id={me.id})"
         self.username = f"@{me.username}"
         logger.info(f"{me.first_name} Is Started.....✨️")
 
-        # Start queue consumer
         asyncio.create_task(process_queue(self))
 
-        # Notify admin and log channel
         for id in Config.ADMIN:
             try:
                 await self.send_message(id, f"**{me.first_name} Is Started.....✨️**")
