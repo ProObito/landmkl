@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 
 from bot import queue, SEMAPHORE
 
-# Regex patterns (improved for [Ch-episode])
+# Regex patterns
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
 pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)', re.IGNORECASE)
 pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)', re.IGNORECASE)
 pattern3_2 = re.compile(r'(?:\s*-\s*(\d+)\s*)')
 pattern4 = re.compile(r'S(\d+)[^\d]*(\d+)', re.IGNORECASE)
 patternX = re.compile(r'(\d+)')
-pattern_ch = re.compile(r'\[Ch-(\d+)\]', re.IGNORECASE)  # New pattern for [Ch-episode]
+pattern_ch = re.compile(r'\[Ch-(\d+)\]', re.IGNORECASE)
 pattern5 = re.compile(r'\b(?:.*?(\d{3,4}[^\dp]*p).*?|.*?(\d{3,4}p))\b', re.IGNORECASE)
 pattern6 = re.compile(r'[([<{]?\s*4k\s*[)\]>}]?', re.IGNORECASE)
 pattern7 = re.compile(r'[([<{]?\s*2k\s*[)\]>}]?', re.IGNORECASE)
@@ -220,7 +220,7 @@ async def autorename_command(client, message):
         logger.error(f"Failed to set autorename format for {user_id}: {e}")
         await message.reply("Error setting autorename format. Please try again.")
 
-@Client.on_message(filters.command("rename") & filters.user(Config.ADMIN))
+@Client.on_message(filters.command("obito") & filters.user(Config.ADMIN))
 async def rename_command(client, message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -250,6 +250,7 @@ async def rename_command(client, message):
 
 @Client.on_message(filters.command("queue_status") & filters.user(Config.ADMIN))
 async def queue_status_command(client, message):
+    pending_count = await madflixbotz.get_pending_queue_count()
     pending_tasks = await madflixbotz.get_pending_queue_tasks()
     tasks = []
     async for task in pending_tasks:
@@ -259,7 +260,12 @@ async def queue_status_command(client, message):
         await message.reply("Queue is empty")
     else:
         task_list = "\n".join([f"- {task['new_file_name']} (ID: {task['file_id']})" for task in tasks])
-        await message.reply(f"Queue Status:\nCurrent queue size: {queue_size}\nPending tasks:\n{task_list}")
+        await message.reply(
+            f"Queue Status:\n"
+            f"Current queue size: {queue_size}\n"
+            f"Pending tasks in DB: {pending_count}\n"
+            f"Tasks:\n{task_list}"
+        )
 
 @Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def auto_rename_files(client, message):
@@ -337,10 +343,14 @@ async def auto_rename_files(client, message):
             "format_template": format_template
         }
         try:
+            current_queue_size = queue.qsize()
             await queue.put(task)
             await log_queue_task(task)
             await madflixbotz.log_queue_task(task)
-            await message.reply(f"File added to rename queue with new name: `{new_file_name}`")
+            if current_queue_size >= 4:  # If queue has 4 or more tasks
+                await message.reply(f"⏳ Your file is in queue, please wait...")
+            else:
+                await message.reply(f"File added to queue, please wait...")
             logger.info(f"Task added to queue for {user_id}: {new_file_name}")
         except asyncio.QueueFull:
             await message.reply("Queue is full, please try again later")
@@ -349,7 +359,3 @@ async def auto_rename_files(client, message):
         await message.reply("Could not extract episode or chapter number")
         logger.warning(f"Failed to extract episode/chapter for {user_id}: {file_name}")
         del renaming_operations[file_id]
-
-
-
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
