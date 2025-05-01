@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from bot import queue, SEMAPHORE
 
-# Regex patterns (enhanced for title, chapter)
+# Regex patterns
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
 pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)', re.IGNORECASE)
 pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)', re.IGNORECASE)
@@ -40,7 +40,7 @@ def extract_title(filename):
         title = match.group(1).strip()
         logger.info(f"Extracted Title: {title}")
         return title
-    return os.path.splitext(filename)[0]  # Fallback to filename without extension
+    return os.path.splitext(filename)[0]
 
 def extract_season_number(filename):
     match = re.search(pattern_season, filename)
@@ -189,6 +189,7 @@ async def rename_file(app, task):
 @Client.on_message(filters.command("autorename"))
 async def autorename_command(client, message):
     args = message.text.split(maxsplit=1)
+    user_id = message.from_user.id
     if len(args) < 2:
         await message.reply(
             "Hᴇʀᴇ'ꜱ ʜᴏᴡ ᴛᴏ ᴜꜱᴇ ɪᴛ /autorename\n\n"
@@ -200,15 +201,19 @@ async def autorename_command(client, message):
             "➝ {quality} :- to replace video resolution\n"
             "➝ {chapter} :- to replace manga chapter number\n\n"
             "‣ Example: /format S{season} E{episode} - {title} [{quality}]\n"
-            "‣ Manga: /format {title} {chapter} @Manhwaflix"
+            "‣ Manga: /format {title} {chapter} @index_Station"
         )
+        logger.info(f"User {user_id} requested autorename help text")
         return
-    autorename_format = args[1]
-    user_id = message.from_user.id
+    autorename_format = args[1].strip()
+    if not autorename_format:
+        await message.reply("Please provide a valid autorename format")
+        logger.warning(f"User {user_id} provided empty autorename format")
+        return
     try:
         await madflixbotz.set_autorename_format(user_id, autorename_format)
+        await message.reply(f"Autorename format set successfully! ✅\nFormat: `{autorename_format}`")
         logger.info(f"Autorename format set for {user_id}: {autorename_format}")
-        await message.reply(f"Autorename format set to: `{autorename_format}`")
     except Exception as e:
         logger.error(f"Failed to set autorename format for {user_id}: {e}")
         await message.reply("Error setting autorename format. Please try again.")
@@ -244,12 +249,18 @@ async def rename_command(client, message):
 @Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def auto_rename_files(client, message):
     user_id = message.from_user.id
-    autorename_format = await madflixbotz.get_autorename_format(user_id)
-    media_preference = await madflixbotz.get_media_preference(user_id)
-
-    if not autorename_format:
-        await message.reply("Please set an auto rename format first using /autorename")
+    try:
+        autorename_format = await madflixbotz.get_autorename_format(user_id)
+        if not autorename_format:
+            await message.reply("Please set an auto rename format first using /autorename")
+            logger.warning(f"No autorename format found for user {user_id}")
+            return
+    except Exception as e:
+        logger.error(f"Error fetching autorename format for {user_id}: {e}")
+        await message.reply("Error accessing autorename format. Please try setting it again with /autorename")
         return
+
+    media_preference = await madflixbotz.get_media_preference(user_id)
 
     if message.document:
         file_id = message.document.file_id
