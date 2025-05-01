@@ -8,21 +8,22 @@ class Database:
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.madflixbotz = self._client[database_name]
         self.col = self.madflixbotz.user
-        self.queue_col = self.madflixbotz.queue  # Collection for queue tasks
+        self.queue_col = self.madflixbotz.queue
 
     def new_user(self, id):
         return dict(
-            _id=int(id),                                   
+            _id=int(id),
             file_id=None,
             caption=None,
-            format_template=None
+            format_template=None,
+            autorename_format=None  # Added for /autorename
         )
 
     async def add_user(self, b, m):
         u = m.from_user
         if not await self.is_user_exist(u.id):
             user = self.new_user(u.id)
-            await self.col.insert_one(user)            
+            await self.col.insert_one(user)
             await send_log(b, u)
 
     async def is_user_exist(self, id):
@@ -68,9 +69,27 @@ class Database:
         user = await self.col.find_one({'_id': int(id)})
         return user.get('media_type', None)
 
-    # Queue task logging
+    async def set_autorename_format(self, id, autorename_format):
+        await self.col.update_one({'_id': int(id)}, {'$set': {'autorename_format': autorename_format}})
+
+    async def get_autorename_format(self, id):
+        user = await self.col.find_one({'_id': int(id)})
+        return user.get('autorename_format', None)
+
     async def log_queue_task(self, task):
-        await self.queue_col.insert_one({"task": task, "timestamp": datetime.now()})
+        serializable_task = {
+            "handler": task["handler"],
+            "message_id": task["message"].id,
+            "chat_id": task["chat_id"],
+            "file_id": task["file_id"],
+            "file_name": task["file_name"],
+            "new_file_name": task["new_file_name"],
+            "media_type": task["media_type"],
+            "file_size": task["file_size"],
+            "format_template": task["format_template"],
+            "timestamp": datetime.now()
+        }
+        await self.queue_col.insert_one(serializable_task)
 
     async def get_pending_queue_tasks(self):
         return self.queue_col.find({})
