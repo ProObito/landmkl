@@ -1,3 +1,4 @@
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from PIL import Image
@@ -17,13 +18,14 @@ logger = logging.getLogger(__name__)
 
 from bot import queue, SEMAPHORE
 
-# Regex patterns
+# Regex patterns (improved for [Ch-episode])
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
 pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)', re.IGNORECASE)
 pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)', re.IGNORECASE)
 pattern3_2 = re.compile(r'(?:\s*-\s*(\d+)\s*)')
 pattern4 = re.compile(r'S(\d+)[^\d]*(\d+)', re.IGNORECASE)
 patternX = re.compile(r'(\d+)')
+pattern_ch = re.compile(r'\[Ch-(\d+)\]', re.IGNORECASE)  # New pattern for [Ch-episode]
 pattern5 = re.compile(r'\b(?:.*?(\d{3,4}[^\dp]*p).*?|.*?(\d{3,4}p))\b', re.IGNORECASE)
 pattern6 = re.compile(r'[([<{]?\s*4k\s*[)\]>}]?', re.IGNORECASE)
 pattern7 = re.compile(r'[([<{]?\s*2k\s*[)\]>}]?', re.IGNORECASE)
@@ -32,7 +34,7 @@ pattern9 = re.compile(r'[([<{]?\s*4kX264\s*[)\]>}]?', re.IGNORECASE)
 pattern10 = re.compile(r'[([<{]?\s*4kx265\s*[)\]>}]?', re.IGNORECASE)
 pattern_season = re.compile(r'S(\d+)|Season\s*(\d+)', re.IGNORECASE)
 pattern_chapter = re.compile(r'(?:Ch|Chapter)\s*(\d+)', re.IGNORECASE)
-pattern_title = re.compile(r'^\[.*?\]\s*(.*?)\s*(?:\[S\d+|\d{3,4}p|Season|Ch|$)', re.IGNORECASE)
+pattern_title = re.compile(r'^\[.*?\]\s*(.*?)\s*(?:\[S\d+|\[Ch-|\d{3,4}p|Season|Ch|$)', re.IGNORECASE)
 
 def extract_title(filename):
     match = re.search(pattern_title, filename)
@@ -63,7 +65,7 @@ def extract_quality(filename):
     return "Unknown"
 
 def extract_episode_number(filename):
-    for pattern in [pattern1, pattern2, pattern3, pattern3_2, pattern4, patternX]:
+    for pattern in [pattern1, pattern2, pattern3, pattern3_2, pattern4, pattern_ch, patternX]:
         match = re.search(pattern, filename)
         if match:
             episode = match.group(2) if pattern in [pattern1, pattern2, pattern4] else match.group(1)
@@ -72,7 +74,7 @@ def extract_episode_number(filename):
     return None
 
 def extract_chapter_number(filename):
-    match = re.search(pattern_chapter, filename)
+    match = re.search(pattern_chapter, filename) or re.search(pattern_ch, filename)
     if match:
         chapter = match.group(1)
         logger.info(f"Extracted Chapter: {chapter}")
@@ -100,7 +102,7 @@ async def rename_file(app, task):
             progress_args=("Download Started....", download_msg, time.time())
         )
     except Exception as e:
-        logger.error(f"Download error: {e}")
+        logger.error(f"Download error for {file_id}: {e}")
         await download_msg.edit(f"Error: {e}")
         del renaming_operations[file_id]
         return
@@ -111,7 +113,7 @@ async def rename_file(app, task):
         if metadata.has("duration"):
             duration = metadata.get('duration').seconds
     except Exception as e:
-        logger.error(f"Error getting duration: {e}")
+        logger.error(f"Error getting duration for {file_id}: {e}")
 
     upload_msg = await download_msg.edit("Trying To Uploading.....")
     ph_path = None
@@ -122,7 +124,7 @@ async def rename_file(app, task):
 
     if c_thumb:
         ph_path = await app.download_media(c_thumb)
-        logger.info(f"Thumbnail downloaded successfully. Path: {ph_path}")
+        logger.info(f"Thumbnail downloaded successfully for {file_id}: {ph_path}")
     elif media_type == "video" and message.video and message.video.thumbs:
         ph_path = await app.download_media(message.video.thumbs[0])
 
@@ -166,10 +168,10 @@ async def rename_file(app, task):
                 )
             break
         except FloodWait as e:
-            logger.error(f"Flood wait on attempt {attempt}: waiting {e.value} seconds")
+            logger.error(f"Flood wait on attempt {attempt} for {file_id}: waiting {e.value} seconds")
             await asyncio.sleep(e.value)
         except Exception as e:
-            logger.error(f"Upload error on attempt {attempt}: {e}")
+            logger.error(f"Upload error on attempt {attempt} for {file_id}: {e}")
             if attempt == max_retries:
                 os.remove(file_path)
                 if ph_path:
@@ -184,7 +186,7 @@ async def rename_file(app, task):
     if ph_path:
         os.remove(ph_path)
     del renaming_operations[file_id]
-    logger.info(f"File {new_file_name} processed successfully")
+    logger.info(f"File {new_file_name} processed successfully for {file_id}")
 
 @Client.on_message(filters.command("autorename"))
 async def autorename_command(client, message):
@@ -246,6 +248,19 @@ async def rename_command(client, message):
     except asyncio.QueueFull:
         await message.reply("Queue is full, please try again later")
 
+@Client.on_message(filters.command("queue_status") & filters.user(Config.ADMIN))
+async def queue_status_command(client, message):
+    pending_tasks = await madflixbotz.get_pending_queue_tasks()
+    tasks = []
+    async for task in pending_tasks:
+        tasks.append(task)
+    queue_size = queue.qsize()
+    if not tasks and queue_size == 0:
+        await message.reply("Queue is empty")
+    else:
+        task_list = "\n".join([f"- {task['new_file_name']} (ID: {task['file_id']})" for task in tasks])
+        await message.reply(f"Queue Status:\nCurrent queue size: {queue_size}\nPending tasks:\n{task_list}")
+
 @Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def auto_rename_files(client, message):
     user_id = message.from_user.id
@@ -281,12 +296,12 @@ async def auto_rename_files(client, message):
         await message.reply("Unsupported file type")
         return
 
-    logger.info(f"Original File Name: {file_name}")
+    logger.info(f"Original File Name for {user_id}: {file_name}")
 
     if file_id in renaming_operations:
         elapsed_time = (datetime.now() - renaming_operations[file_id]).seconds
         if elapsed_time < 10:
-            logger.info("File is being ignored as it is currently being renamed or was renamed recently.")
+            logger.info(f"File {file_id} ignored: currently being renamed or recently renamed")
             return
 
     renaming_operations[file_id] = datetime.now()
@@ -299,7 +314,8 @@ async def auto_rename_files(client, message):
 
     if episode_number or chapter_number:
         format_template = autorename_format
-        format_template = format_template.replace("{title}", title, 1)
+        logger.info(f"Applying format template for {user_id}: {format_template}")
+        format_template = format_template.replace("{title}", title or "Unknown", 1)
         format_template = format_template.replace("{season}", season_number, 1).replace("Season", season_number, 1).replace("SEASON", season_number, 1)
         format_template = format_template.replace("{episode}", episode_number or "00", 1).replace("Episode", episode_number or "00", 1).replace("EPISODE", episode_number or "00", 1)
         format_template = format_template.replace("{quality}", quality, 1).replace("Quality", quality, 1).replace("QUALITY", quality, 1)
@@ -307,6 +323,7 @@ async def auto_rename_files(client, message):
 
         _, file_extension = os.path.splitext(file_name)
         new_file_name = f"{format_template}{file_extension}"
+        logger.info(f"Generated new file name for {user_id}: {new_file_name}")
 
         task = {
             "handler": "rename",
@@ -324,8 +341,15 @@ async def auto_rename_files(client, message):
             await log_queue_task(task)
             await madflixbotz.log_queue_task(task)
             await message.reply(f"File added to rename queue with new name: `{new_file_name}`")
+            logger.info(f"Task added to queue for {user_id}: {new_file_name}")
         except asyncio.QueueFull:
             await message.reply("Queue is full, please try again later")
+            logger.warning(f"Queue full for user {user_id}")
     else:
         await message.reply("Could not extract episode or chapter number")
+        logger.warning(f"Failed to extract episode/chapter for {user_id}: {file_name}")
         del renaming_operations[file_id]
+
+
+
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
