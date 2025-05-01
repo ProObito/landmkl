@@ -2,12 +2,12 @@ import math, time
 from datetime import datetime
 from pytz import timezone
 from config import Config, Txt 
-from telethon.tl.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import logging
 
 logger = logging.getLogger(__name__)
 
-async def progress_for_telethon(current, total, ud_type, message, start):
+async def progress_for_pyrogram(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
     if round(diff % 5.00) == 0 or current == total:        
@@ -32,7 +32,7 @@ async def progress_for_telethon(current, total, ud_type, message, start):
             estimated_total_time if estimated_total_time != '' else "0 s"
         )
         try:
-            await message.edit_text(
+            await message.edit(
                 text=f"{ud_type}\n\n{tmp}",               
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel ✖️", callback_data="close")]])
             )
