@@ -16,7 +16,8 @@ class Database:
             file_id=None,
             caption=None,
             format_template=None,
-            autorename_format=None  # Added for /autorename
+            autorename_format=None,
+            media_type=None
         )
 
     async def add_user(self, b, m):
@@ -42,39 +43,49 @@ class Database:
         await self.col.delete_many({'_id': int(user_id)})
 
     async def set_thumbnail(self, id, file_id):
+        if not await self.is_user_exist(id):
+            await self.col.insert_one(self.new_user(id))
         await self.col.update_one({'_id': int(id)}, {'$set': {'file_id': file_id}})
 
     async def get_thumbnail(self, id):
         user = await self.col.find_one({'_id': int(id)})
-        return user.get('file_id', None)
+        return user.get('file_id', None) if user else None
 
     async def set_caption(self, id, caption):
+        if not await self.is_user_exist(id):
+            await self.col.insert_one(self.new_user(id))
         await self.col.update_one({'_id': int(id)}, {'$set': {'caption': caption}})
 
     async def get_caption(self, id):
         user = await self.col.find_one({'_id': int(id)})
-        return user.get('caption', None)
+        return user.get('caption', None) if user else None
 
     async def set_format_template(self, id, format_template):
+        if not await self.is_user_exist(id):
+            await self.col.insert_one(self.new_user(id))
         await self.col.update_one({'_id': int(id)}, {'$set': {'format_template': format_template}})
 
     async def get_format_template(self, id):
         user = await self.col.find_one({'_id': int(id)})
-        return user.get('format_template', None)
+        return user.get('format_template', None) if user else None
 
     async def set_media_preference(self, id, media_type):
+        if not await self.is_user_exist(id):
+            await self.col.insert_one(self.new_user(id))
         await self.col.update_one({'_id': int(id)}, {'$set': {'media_type': media_type}})
 
     async def get_media_preference(self, id):
         user = await self.col.find_one({'_id': int(id)})
-        return user.get('media_type', None)
+        return user.get('media_type', None) if user else None
 
     async def set_autorename_format(self, id, autorename_format):
+        if not await self.is_user_exist(id):
+            await self.col.insert_one(self.new_user(id))
         await self.col.update_one({'_id': int(id)}, {'$set': {'autorename_format': autorename_format}})
 
     async def get_autorename_format(self, id):
         user = await self.col.find_one({'_id': int(id)})
-        return user.get('autorename_format', None)
+        return user.get('autorename_format', None) if user else None
 
     async def log_queue_task(self, task):
         serializable_task = {
