@@ -6,7 +6,7 @@ from hachoir.metadata import extractMetadata
 from hachoir.parser import createParser
 from helper.utils import progress_for_pyrogram, humanbytes, convert, log_queue_task
 from helper.database import madflixbotz
-from config import Config, Txt
+from config import Config
 import os
 import time
 import re
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from bot import queue, SEMAPHORE
 
-# Regex patterns (enhanced for season and more cases)
+# Regex patterns (enhanced for title, chapter)
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
 pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)', re.IGNORECASE)
 pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)', re.IGNORECASE)
@@ -31,64 +31,52 @@ pattern8 = re.compile(r'[([<{]?\s*HdRip\s*[)\]>}]?|\bHdRip\b', re.IGNORECASE)
 pattern9 = re.compile(r'[([<{]?\s*4kX264\s*[)\]>}]?', re.IGNORECASE)
 pattern10 = re.compile(r'[([<{]?\s*4kx265\s*[)\]>}]?', re.IGNORECASE)
 pattern_season = re.compile(r'S(\d+)|Season\s*(\d+)', re.IGNORECASE)
+pattern_chapter = re.compile(r'(?:Ch|Chapter)\s*(\d+)', re.IGNORECASE)
+pattern_title = re.compile(r'^\[.*?\]\s*(.*?)\s*(?:\[S\d+|\d{3,4}p|Season|Ch|$)', re.IGNORECASE)
+
+def extract_title(filename):
+    match = re.search(pattern_title, filename)
+    if match:
+        title = match.group(1).strip()
+        logger.info(f"Extracted Title: {title}")
+        return title
+    return os.path.splitext(filename)[0]  # Fallback to filename without extension
 
 def extract_season_number(filename):
     match = re.search(pattern_season, filename)
     if match:
         season = match.group(1) or match.group(2)
         logger.info(f"Extracted Season Number: {season}")
-        return season
-    return "01"  # Default to season 1 if not found
+        return season.zfill(2)
+    return "01"
 
 def extract_quality(filename):
-    match5 = re.search(pattern5, filename)
-    if match5:
-        logger.info("Matched Pattern 5")
-        quality5 = match5.group(1) or match5.group(2)
-        logger.info(f"Quality: {quality5}")
-        return quality5
-    match6 = re.search(pattern6, filename)
-    if match6:
-        logger.info("Matched Pattern 6")
-        quality6 = "4k"
-        logger.info(f"Quality: {quality6}")
-        return quality6
-    match7 = re.search(pattern7, filename)
-    if match7:
-        logger.info("Matched Pattern 7")
-        quality7 = "2k"
-        logger.info(f"Quality: {quality7}")
-        return quality7
-    match8 = re.search(pattern8, filename)
-    if match8:
-        logger.info("Matched Pattern 8")
-        quality8 = "HdRip"
-        logger.info(f"Quality: {quality8}")
-        return quality8
-    match9 = re.search(pattern9, filename)
-    if match9:
-        logger.info("Matched Pattern 9")
-        quality9 = "4kX264"
-        logger.info(f"Quality: {quality9}")
-        return quality9
-    match10 = re.search(pattern10, filename)
-    if match10:
-        logger.info("Matched Pattern 10")
-        quality10 = "4kx265"
-        logger.info(f"Quality: {quality10}")
-        return quality10
-    unknown_quality = "Unknown"
-    logger.info(f"Quality: {unknown_quality}")
-    return unknown_quality
+    for pattern in [pattern5, pattern6, pattern7, pattern8, pattern9, pattern10]:
+        match = re.search(pattern, filename)
+        if match:
+            if pattern == pattern5:
+                quality = match.group(1) or match.group(2)
+            else:
+                quality = match.group(0).strip('[](){} ')
+            logger.info(f"Quality: {quality}")
+            return quality
+    return "Unknown"
 
 def extract_episode_number(filename):
-    patterns = [pattern1, pattern2, pattern3, pattern3_2, pattern4, patternX]
-    for pattern in patterns:
+    for pattern in [pattern1, pattern2, pattern3, pattern3_2, pattern4, patternX]:
         match = re.search(pattern, filename)
         if match:
             episode = match.group(2) if pattern in [pattern1, pattern2, pattern4] else match.group(1)
-            logger.info(f"Matched Pattern {pattern.__name__}, Episode: {episode}")
-            return episode.zfill(2)  # Pad with zero
+            logger.info(f"Extracted Episode: {episode}")
+            return episode.zfill(2)
+    return None
+
+def extract_chapter_number(filename):
+    match = re.search(pattern_chapter, filename)
+    if match:
+        chapter = match.group(1)
+        logger.info(f"Extracted Chapter: {chapter}")
+        return chapter.zfill(2)
     return None
 
 renaming_operations = {}
@@ -202,13 +190,28 @@ async def rename_file(app, task):
 async def autorename_command(client, message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply(Txt.FILE_NAME_TXT)
+        await message.reply(
+            "Hᴇʀᴇ'ꜱ ʜᴏᴡ ᴛᴏ ᴜꜱᴇ ɪᴛ /autorename\n\n"
+            "SETUP AUTO RENAME FORMAT\n\n"
+            "Use These Keywords To Setup Custom File Name\n\n"
+            "➝ {title} :- to replace anime or series title name\n"
+            "➝ {season} :- to replace season number\n"
+            "➝ {episode} :- to replace episode number\n"
+            "➝ {quality} :- to replace video resolution\n"
+            "➝ {chapter} :- to replace manga chapter number\n\n"
+            "‣ Example: /format S{season} E{episode} - {title} [{quality}]\n"
+            "‣ Manga: /format {title} {chapter} @Manhwaflix"
+        )
         return
     autorename_format = args[1]
     user_id = message.from_user.id
-    await madflixbotz.set_autorename_format(user_id, autorename_format)
-    logger.info(f"Autorename format set for {user_id}: {autorename_format}")
-    await message.reply(f"Autorename format set to: `{autorename_format}`")
+    try:
+        await madflixbotz.set_autorename_format(user_id, autorename_format)
+        logger.info(f"Autorename format set for {user_id}: {autorename_format}")
+        await message.reply(f"Autorename format set to: `{autorename_format}`")
+    except Exception as e:
+        logger.error(f"Failed to set autorename format for {user_id}: {e}")
+        await message.reply("Error setting autorename format. Please try again.")
 
 @Client.on_message(filters.command("rename") & filters.user(Config.ADMIN))
 async def rename_command(client, message):
@@ -280,13 +283,16 @@ async def auto_rename_files(client, message):
     episode_number = extract_episode_number(file_name)
     season_number = extract_season_number(file_name)
     quality = extract_quality(file_name)
+    chapter_number = extract_chapter_number(file_name)
+    title = extract_title(file_name)
 
-    if episode_number:
+    if episode_number or chapter_number:
         format_template = autorename_format
-        # Replace variables
-        format_template = format_template.replace("episode", episode_number, 1).replace("Episode", episode_number, 1).replace("EPISODE", episode_number, 1).replace("{episode}", episode_number, 1)
-        format_template = format_template.replace("season", season_number, 1).replace("Season", season_number, 1).replace("SEASON", season_number, 1).replace("{season}", season_number, 1)
-        format_template = format_template.replace("quality", quality, 1).replace("Quality", quality, 1).replace("QUALITY", quality, 1).replace("{quality}", quality, 1)
+        format_template = format_template.replace("{title}", title, 1)
+        format_template = format_template.replace("{season}", season_number, 1).replace("Season", season_number, 1).replace("SEASON", season_number, 1)
+        format_template = format_template.replace("{episode}", episode_number or "00", 1).replace("Episode", episode_number or "00", 1).replace("EPISODE", episode_number or "00", 1)
+        format_template = format_template.replace("{quality}", quality, 1).replace("Quality", quality, 1).replace("QUALITY", quality, 1)
+        format_template = format_template.replace("{chapter}", chapter_number or "00", 1).replace("Chapter", chapter_number or "00", 1).replace("CHAPTER", chapter_number or "00", 1)
 
         _, file_extension = os.path.splitext(file_name)
         new_file_name = f"{format_template}{file_extension}"
@@ -310,5 +316,5 @@ async def auto_rename_files(client, message):
         except asyncio.QueueFull:
             await message.reply("Queue is full, please try again later")
     else:
-        await message.reply("Could not extract episode number")
+        await message.reply("Could not extract episode or chapter number")
         del renaming_operations[file_id]
