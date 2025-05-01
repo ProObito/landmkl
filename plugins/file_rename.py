@@ -6,7 +6,7 @@ from hachoir.metadata import extractMetadata
 from hachoir.parser import createParser
 from helper.utils import progress_for_pyrogram, humanbytes, convert, log_queue_task
 from helper.database import madflixbotz
-from config import Config
+from config import Config, Txt
 import os
 import time
 import re
@@ -15,13 +15,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Global queue and semaphore (imported from bot.py)
 from bot import queue, SEMAPHORE
 
-# Regex patterns (unchanged)
-pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)')
-pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)')
-pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)')
+# Regex patterns (enhanced for season and more cases)
+pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
+pattern2 = re.compile(r'S(\d+)\s*(?:E|EP|-\s*EP)(\d+)', re.IGNORECASE)
+pattern3 = re.compile(r'(?:[([<{]?\s*(?:E|EP)\s*(\d+)\s*[)\]>}]?)', re.IGNORECASE)
 pattern3_2 = re.compile(r'(?:\s*-\s*(\d+)\s*)')
 pattern4 = re.compile(r'S(\d+)[^\d]*(\d+)', re.IGNORECASE)
 patternX = re.compile(r'(\d+)')
@@ -31,6 +30,15 @@ pattern7 = re.compile(r'[([<{]?\s*2k\s*[)\]>}]?', re.IGNORECASE)
 pattern8 = re.compile(r'[([<{]?\s*HdRip\s*[)\]>}]?|\bHdRip\b', re.IGNORECASE)
 pattern9 = re.compile(r'[([<{]?\s*4kX264\s*[)\]>}]?', re.IGNORECASE)
 pattern10 = re.compile(r'[([<{]?\s*4kx265\s*[)\]>}]?', re.IGNORECASE)
+pattern_season = re.compile(r'S(\d+)|Season\s*(\d+)', re.IGNORECASE)
+
+def extract_season_number(filename):
+    match = re.search(pattern_season, filename)
+    if match:
+        season = match.group(1) or match.group(2)
+        logger.info(f"Extracted Season Number: {season}")
+        return season
+    return "01"  # Default to season 1 if not found
 
 def extract_quality(filename):
     match5 = re.search(pattern5, filename)
@@ -68,42 +76,24 @@ def extract_quality(filename):
         logger.info("Matched Pattern 10")
         quality10 = "4kx265"
         logger.info(f"Quality: {quality10}")
-        return quality10    
+        return quality10
     unknown_quality = "Unknown"
     logger.info(f"Quality: {unknown_quality}")
     return unknown_quality
 
-def extract_episode_number(filename):    
-    match = re.search(pattern1, filename)
-    if match:
-        logger.info("Matched Pattern 1")
-        return match.group(2)
-    match = re.search(pattern2, filename)
-    if match:
-        logger.info("Matched Pattern 2")
-        return match.group(2)
-    match = re.search(pattern3, filename)
-    if match:
-        logger.info("Matched Pattern 3")
-        return match.group(1)
-    match = re.search(pattern3_2, filename)
-    if match:
-        logger.info("Matched Pattern 3_2")
-        return match.group(1)
-    match = re.search(pattern4, filename)
-    if match:
-        logger.info("Matched Pattern 4")
-        return match.group(2)
-    match = re.search(patternX, filename)
-    if match:
-        logger.info("Matched Pattern X")
-        return match.group(1)
+def extract_episode_number(filename):
+    patterns = [pattern1, pattern2, pattern3, pattern3_2, pattern4, patternX]
+    for pattern in patterns:
+        match = re.search(pattern, filename)
+        if match:
+            episode = match.group(2) if pattern in [pattern1, pattern2, pattern4] else match.group(1)
+            logger.info(f"Matched Pattern {pattern.__name__}, Episode: {episode}")
+            return episode.zfill(2)  # Pad with zero
     return None
 
 renaming_operations = {}
 
 async def rename_file(app, task):
-    """Process a rename task from the queue"""
     message = task["message"]
     file_id = task["file_id"]
     file_name = task["file_name"]
@@ -208,6 +198,18 @@ async def rename_file(app, task):
     del renaming_operations[file_id]
     logger.info(f"File {new_file_name} processed successfully")
 
+@Client.on_message(filters.command("autorename"))
+async def autorename_command(client, message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply(Txt.FILE_NAME_TXT)
+        return
+    autorename_format = args[1]
+    user_id = message.from_user.id
+    await madflixbotz.set_autorename_format(user_id, autorename_format)
+    logger.info(f"Autorename format set for {user_id}: {autorename_format}")
+    await message.reply(f"Autorename format set to: `{autorename_format}`")
+
 @Client.on_message(filters.command("rename") & filters.user(Config.ADMIN))
 async def rename_command(client, message):
     args = message.text.split(maxsplit=1)
@@ -231,7 +233,7 @@ async def rename_command(client, message):
     try:
         await queue.put(task)
         await log_queue_task(task)
-        await madflixbotz.log_queue_task(task)  # Log to database
+        await madflixbotz.log_queue_task(task)
         await message.reply("File added to rename queue")
     except asyncio.QueueFull:
         await message.reply("Queue is full, please try again later")
@@ -239,11 +241,11 @@ async def rename_command(client, message):
 @Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def auto_rename_files(client, message):
     user_id = message.from_user.id
-    format_template = await madflixbotz.get_format_template(user_id)
+    autorename_format = await madflixbotz.get_autorename_format(user_id)
     media_preference = await madflixbotz.get_media_preference(user_id)
 
-    if not format_template:
-        await message.reply("Please Set An Auto Rename Format First Using /autorename")
+    if not autorename_format:
+        await message.reply("Please set an auto rename format first using /autorename")
         return
 
     if message.document:
@@ -262,7 +264,7 @@ async def auto_rename_files(client, message):
         media_type = media_preference or "audio"
         file_size = message.audio.file_size
     else:
-        await message.reply("Unsupported File Type")
+        await message.reply("Unsupported file type")
         return
 
     logger.info(f"Original File Name: {file_name}")
@@ -276,22 +278,15 @@ async def auto_rename_files(client, message):
     renaming_operations[file_id] = datetime.now()
 
     episode_number = extract_episode_number(file_name)
-    logger.info(f"Extracted Episode Number: {episode_number}")
+    season_number = extract_season_number(file_name)
+    quality = extract_quality(file_name)
 
     if episode_number:
-        placeholders = ["episode", "Episode", "EPISODE", "{episode}"]
-        for placeholder in placeholders:
-            format_template = format_template.replace(placeholder, str(episode_number), 1)
-
-        quality_placeholders = ["quality", "Quality", "QUALITY", "{quality}"]
-        for quality_placeholder in quality_placeholders:
-            if quality_placeholder in format_template:
-                extracted_qualities = extract_quality(file_name)
-                if extracted_qualities == "Unknown":
-                    await message.reply("I Was Not Able To Extract The Quality Properly. Renaming As 'Unknown'...")
-                    del renaming_operations[file_id]
-                    return
-                format_template = format_template.replace(quality_placeholder, "".join(extracted_qualities))
+        format_template = autorename_format
+        # Replace variables
+        format_template = format_template.replace("episode", episode_number, 1).replace("Episode", episode_number, 1).replace("EPISODE", episode_number, 1).replace("{episode}", episode_number, 1)
+        format_template = format_template.replace("season", season_number, 1).replace("Season", season_number, 1).replace("SEASON", season_number, 1).replace("{season}", season_number, 1)
+        format_template = format_template.replace("quality", quality, 1).replace("Quality", quality, 1).replace("QUALITY", quality, 1).replace("{quality}", quality, 1)
 
         _, file_extension = os.path.splitext(file_name)
         new_file_name = f"{format_template}{file_extension}"
@@ -311,7 +306,7 @@ async def auto_rename_files(client, message):
             await queue.put(task)
             await log_queue_task(task)
             await madflixbotz.log_queue_task(task)
-            await message.reply("File added to rename queue")
+            await message.reply(f"File added to rename queue with new name: `{new_file_name}`")
         except asyncio.QueueFull:
             await message.reply("Queue is full, please try again later")
     else:
