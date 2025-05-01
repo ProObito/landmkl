@@ -44,15 +44,21 @@ async def process_queue(app):
     while True:
         task = await queue.get()
         async with SEMAPHORE:  # Limit concurrent processing
-            try:
-                logger.info(f"Processing task: {task}")
-                if task["handler"] == "rename":
-                    from plugins.file_rename import rename_file
-                    await rename_file(app, task)
-                queue.task_done()
-            except Exception as e:
-                logger.error(f"Error processing task {task}: {e}")
-                queue.task_done()
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    logger.info(f"Processing task: {task}")
+                    if task["handler"] == "rename":
+                        from plugins.file_rename import rename_file
+                        await rename_file(app, task)
+                    queue.task_done()
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing task {task} on attempt {attempt}: {e}")
+                    if attempt == max_retries:
+                        logger.error(f"Max retries reached for task {task}")
+                        queue.task_done()
+                    await asyncio.sleep(2 ** attempt)
 
 class Bot(Client):
     def __init__(self):
@@ -62,14 +68,13 @@ class Bot(Client):
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN,
             plugins={"root": "plugins"},
-            workers=25  # As per your previous request
+            workers=25
         )
         self.mention = None
         self.username = None
         self.uptime = Config.BOT_UPTIME
 
     async def start(self):
-        # Attempt to connect with retries
         max_retries = 5
         for attempt in range(1, max_retries + 1):
             try:
@@ -81,7 +86,7 @@ class Bot(Client):
                 if attempt == max_retries:
                     logger.error("Max retries reached, exiting")
                     raise
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                await asyncio.sleep(2 ** attempt)
 
         me = await self.get_me()
         self.mention = f"[{me.first_name}](tg://user?id={me.id})"
