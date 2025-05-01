@@ -1,5 +1,4 @@
 # +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
-
 import motor.motor_asyncio
 from config import Config
 from .utils import send_log
@@ -137,17 +136,18 @@ class Database:
             "media_type": task["media_type"],
             "file_size": task["file_size"],
             "format_template": task["format_template"],
+            "user_id": task["user_id"],
             "timestamp": datetime.now()
         }
         await self.queue_col.insert_one(serializable_task)
-        logger.info(f"Logged queue task: {serializable_task}")
+        logger.info(f"Logged queue task for user {task['user_id']}: {serializable_task}")
 
     async def get_pending_queue_tasks(self):
         tasks = self.queue_col.find({})
         return tasks
 
+    async def get_pending_queue_count(self):
+        count = await self.queue_col.count_documents({})
+        return count
+
 madflixbotz = Database(Config.DB_URL, Config.DB_NAME)
-
-
-
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
