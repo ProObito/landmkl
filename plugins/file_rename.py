@@ -1,4 +1,3 @@
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from PIL import Image
@@ -13,10 +12,14 @@ import time
 import re
 import asyncio
 import logging
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-from bot import queue, SEMAPHORE
+from bot import queue, user_semaphores, MAX_CONCURRENT_TASKS, global_semaphore
+
+# Track active tasks per user
+user_active_tasks = defaultdict(int)
 
 # Regex patterns
 pattern1 = re.compile(r'S(\d+)(?:E|EP)(\d+)', re.IGNORECASE)
@@ -92,101 +95,104 @@ async def rename_file(app, task):
     chat_id = task["chat_id"]
     file_size = task["file_size"]
     format_template = task["format_template"]
+    user_id = task["user_id"]
 
-    file_path = f"downloads/{new_file_name}"
-    download_msg = await app.send_message(chat_id, "Trying To Download.....")
+    global user_active_tasks
     try:
+        file_path = f"downloads/{new_file_name}"
+        download_msg = await app.send_message(chat_id, "Trying To Download.....")
         path = await message.download(
             file_name=file_path,
             progress=progress_for_pyrogram,
             progress_args=("Download Started....", download_msg, time.time())
         )
-    except Exception as e:
-        logger.error(f"Download error for {file_id}: {e}")
-        await download_msg.edit(f"Error: {e}")
-        del renaming_operations[file_id]
-        return
 
-    duration = 0
-    try:
-        metadata = extractMetadata(createParser(file_path))
-        if metadata.has("duration"):
-            duration = metadata.get('duration').seconds
-    except Exception as e:
-        logger.error(f"Error getting duration for {file_id}: {e}")
-
-    upload_msg = await download_msg.edit("Trying To Uploading.....")
-    ph_path = None
-    c_caption = await madflixbotz.get_caption(chat_id)
-    c_thumb = await madflixbotz.get_thumbnail(chat_id)
-
-    caption = c_caption.format(filename=new_file_name, filesize=humanbytes(file_size), duration=convert(duration)) if c_caption else f"**{new_file_name}**"
-
-    if c_thumb:
-        ph_path = await app.download_media(c_thumb)
-        logger.info(f"Thumbnail downloaded successfully for {file_id}: {ph_path}")
-    elif media_type == "video" and message.video and message.video.thumbs:
-        ph_path = await app.download_media(message.video.thumbs[0])
-
-    if ph_path:
-        Image.open(ph_path).convert("RGB").save(ph_path)
-        img = Image.open(ph_path)
-        img.resize((320, 320))
-        img.save(ph_path, "JPEG")
-
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
+        duration = 0
         try:
-            if media_type == "document":
-                await app.send_document(
-                    chat_id,
-                    document=file_path,
-                    thumb=ph_path,
-                    caption=caption,
-                    progress=progress_for_pyrogram,
-                    progress_args=("Upload Started.....", upload_msg, time.time())
-                )
-            elif media_type == "video":
-                await app.send_video(
-                    chat_id,
-                    video=file_path,
-                    caption=caption,
-                    thumb=ph_path,
-                    duration=duration,
-                    progress=progress_for_pyrogram,
-                    progress_args=("Upload Started.....", upload_msg, time.time())
-                )
-            elif media_type == "audio":
-                await app.send_audio(
-                    chat_id,
-                    audio=file_path,
-                    caption=caption,
-                    thumb=ph_path,
-                    duration=duration,
-                    progress=progress_for_pyrogram,
-                    progress_args=("Upload Started.....", upload_msg, time.time())
-                )
-            break
-        except FloodWait as e:
-            logger.error(f"Flood wait on attempt {attempt} for {file_id}: waiting {e.value} seconds")
-            await asyncio.sleep(e.value)
+            metadata = extractMetadata(createParser(file_path))
+            if metadata.has("duration"):
+                duration = metadata.get('duration').seconds
         except Exception as e:
-            logger.error(f"Upload error on attempt {attempt} for {file_id}: {e}")
-            if attempt == max_retries:
-                os.remove(file_path)
-                if ph_path:
-                    os.remove(ph_path)
-                await upload_msg.edit(f"Error: {e}")
-                del renaming_operations[file_id]
-                return
-            await asyncio.sleep(2)
+            logger.error(f"Error getting duration for {file_id}: {e}")
 
-    await download_msg.delete()
-    os.remove(file_path)
-    if ph_path:
-        os.remove(ph_path)
-    del renaming_operations[file_id]
-    logger.info(f"File {new_file_name} processed successfully for {file_id}")
+        upload_msg = await download_msg.edit("Trying To Uploading.....")
+        ph_path = None
+        c_caption = await madflixbotz.get_caption(chat_id)
+        c_thumb = await madflixbotz.get_thumbnail(chat_id)
+
+        caption = c_caption.format(filename=new_file_name, filesize=humanbytes(file_size), duration=convert(duration)) if c_caption else f"**{new_file_name}**"
+
+        if c_thumb:
+            ph_path = await app.download_media(c_thumb)
+            logger.info(f"Thumbnail downloaded successfully for {file_id}: {ph_path}")
+        elif media_type == "video" and message.video and message.video.thumbs:
+            ph_path = await app.download_media(message.video.thumbs[0])
+
+        if ph_path:
+            Image.open(ph_path).convert("RGB").save(ph_path)
+            img = Image.open(ph_path)
+            img.resize((320, 320))
+            img.save(ph_path, "JPEG")
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                if media_type == "document":
+                    await app.send_document(
+                        chat_id,
+                        document=file_path,
+                        thumb=ph_path,
+                        caption=caption,
+                        progress=progress_for_pyrogram,
+                        progress_args=("Upload Started.....", upload_msg, time.time())
+                    )
+                elif media_type == "video":
+                    await app.send_video(
+                        chat_id,
+                        video=file_path,
+                        caption=caption,
+                        thumb=ph_path,
+                        duration=duration,
+                        progress=progress_for_pyrogram,
+                        progress_args=("Upload Started.....", upload_msg, time.time())
+                    )
+                elif media_type == "audio":
+                    await app.send_audio(
+                        chat_id,
+                        audio=file_path,
+                        caption=caption,
+                        thumb=ph_path,
+                        duration=duration,
+                        progress=progress_for_pyrogram,
+                        progress_args=("Upload Started.....", upload_msg, time.time())
+                    )
+                break
+            except FloodWait as e:
+                logger.error(f"Flood wait on attempt {attempt} for {file_id}: waiting {e.value} seconds")
+                await asyncio.sleep(e.value)
+            except Exception as e:
+                logger.error(f"Upload error on attempt {attempt} for {file_id}: {e}")
+                if attempt == max_retries:
+                    os.remove(file_path)
+                    if ph_path:
+                        os.remove(ph_path)
+                    await upload_msg.edit(f"Error: {e}")
+                    return
+                await asyncio.sleep(2)
+
+        await download_msg.delete()
+        os.remove(file_path)
+        if ph_path:
+            os.remove(ph_path)
+        logger.info(f"File {new_file_name} processed successfully for {file_id}")
+    except Exception as e:
+        logger.error(f"Error in rename_file for {file_id}: {e}")
+        await app.send_message(chat_id, f"Error processing file {new_file_name}: {e}")
+    finally:
+        user_active_tasks[user_id] -= 1
+        if user_active_tasks[user_id] <= 0:
+            del user_active_tasks[user_id]
+        del renaming_operations[file_id]
 
 @Client.on_message(filters.command("autorename"))
 async def autorename_command(client, message):
@@ -220,7 +226,7 @@ async def autorename_command(client, message):
         logger.error(f"Failed to set autorename format for {user_id}: {e}")
         await message.reply("Error setting autorename format. Please try again.")
 
-@Client.on_message(filters.command("obito") & filters.user(Config.ADMIN))
+@Client.on_message(filters.command("rename") & filters.user(Config.ADMIN))
 async def rename_command(client, message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -228,6 +234,7 @@ async def rename_command(client, message):
         return
     new_name = args[1]
     chat_id = message.chat.id
+    user_id = message.from_user.id
     file_id = f"manual_{chat_id}_{int(time.time())}"
     task = {
         "handler": "rename",
@@ -238,7 +245,8 @@ async def rename_command(client, message):
         "media_type": "document",
         "chat_id": chat_id,
         "file_size": 0,
-        "format_template": new_name
+        "format_template": new_name,
+        "user_id": user_id
     }
     try:
         await queue.put(task)
@@ -259,11 +267,13 @@ async def queue_status_command(client, message):
     if not tasks and queue_size == 0:
         await message.reply("Queue is empty")
     else:
-        task_list = "\n".join([f"- {task['new_file_name']} (ID: {task['file_id']})" for task in tasks])
+        task_list = "\n".join([f"- User {task['user_id']}: {task['new_file_name']} (ID: {task['file_id']})" for task in tasks])
+        active_users = "\n".join([f"User {uid}: {count} active tasks" for uid, count in user_active_tasks.items()])
         await message.reply(
             f"Queue Status:\n"
             f"Current queue size: {queue_size}\n"
             f"Pending tasks in DB: {pending_count}\n"
+            f"Active users:\n{active_users or 'None'}\n"
             f"Tasks:\n{task_list}"
         )
 
@@ -340,18 +350,20 @@ async def auto_rename_files(client, message):
             "media_type": media_type,
             "chat_id": message.chat.id,
             "file_size": file_size,
-            "format_template": format_template
+            "format_template": format_template,
+            "user_id": user_id
         }
         try:
-            current_queue_size = queue.qsize()
+            active_tasks = user_active_tasks[user_id]
             await queue.put(task)
             await log_queue_task(task)
             await madflixbotz.log_queue_task(task)
-            if current_queue_size >= 4:  # If queue has 4 or more tasks
+            user_active_tasks[user_id] += 1
+            if active_tasks >= 4:
                 await message.reply(f"⏳ Your file is in queue, please wait...")
             else:
-                await message.reply(f"File added to queue, please wait...")
-            logger.info(f"Task added to queue for {user_id}: {new_file_name}")
+                await message.reply(f"File added to rename queue, please wait...")
+            logger.info(f"Task added to queue")
         except asyncio.QueueFull:
             await message.reply("Queue is full, please try again later")
             logger.warning(f"Queue full for user {user_id}")
