@@ -9,3 +9,4 @@ pyrogram==2.0.106
 motor
 pillow
 hachoir
+telegram 
